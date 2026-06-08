@@ -101,10 +101,17 @@ does this automatically).
 
 ## Run the host client
 
+One-time setup — grant your user access to input devices + the serial port (no
+sudo needed afterward), then **log out and back in** so it takes effect:
+
 ```sh
-pip install evdev pyserial      # (or distro pkgs: python-evdev, python-pyserial)
+sudo usermod -aG input,uucp "$USER"   # then re-login
+pip install evdev pyserial            # (or: python-evdev, python-pyserial)
+```
+
+```sh
 cd client
-sudo ./run.sh                   # auto-detects the bridge Pico's serial port
+./run.sh                        # auto-detects the bridge Pico's serial port
 ```
 
 1. Leave one Pico in your PC (becomes the bridge), plug the other into the target.
@@ -123,7 +130,7 @@ A small GTK4 app picks which devices get forwarded and lets you set the hotkey:
 
 ```sh
 cd client
-./run_gui.sh                    # runs under sudo on your graphical session
+./run_gui.sh                    # runs as your user (needs the 'input' group)
 ```
 
 - **Devices**: tick the keyboards/pointers to forward. (No selection saved yet =
@@ -135,8 +142,7 @@ cd client
   running client (no restart) by signalling it.
 
 The hotkey is watched on every device regardless of selection, so it always
-works. Needs PyGObject + GTK4 (`python-gobject`, `gtk4`) plus root to read
-`/dev/input` — `run_gui.sh` forwards your Wayland/X display to the sudo'd app.
+works. Needs PyGObject + GTK4 (`python-gobject`, `gtk4`) and the `input` group.
 
 ## Tray indicator
 
@@ -158,6 +164,10 @@ cd client
 The client publishes its state to `$XDG_RUNTIME_DIR/geppetto.status` and toggles
 on `SIGUSR1`; the tray polls the former and sends the latter. Needs
 `libayatana-appindicator` + `gtk3`.
+
+> Run everything as **your user**, not via sudo — a tray icon only appears on
+> your own session bus (a root app won't register with the desktop's tray). The
+> `input`/`uucp` groups above are what let it read devices without root.
 
 ## Layout
 

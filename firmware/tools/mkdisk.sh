@@ -22,11 +22,16 @@ Geppetto — host client
 This is one half of a Geppetto HID bridge: two soldered RP2040 Picos that
 forward keyboard + mouse from this PC to another machine over a wire.
 
-Run (needs root for /dev/input and the serial port):
-    sudo python3 geppetto.py        # auto-detects the bridge port
-Deps: pip install evdev pyserial
+Setup (once): add yourself to the input + uucp groups, then re-login:
+    sudo usermod -aG input,uucp "$USER"
+    pip install evdev pyserial
 
-Double-tap RIGHT CTRL to start/stop driving the other machine.
+Run (no sudo once you're in those groups):
+    ./run_tray.sh                   # tray icon (recommended)
+    ./run_gui.sh                    # settings window
+    ./run.sh                        # client only
+
+Double-tap RIGHT CTRL (default) to start/stop driving the other machine.
 Full notes in the docstring at the top of geppetto.py, and at
 https://github.com/Bake-Ware/geppetto
 TXT

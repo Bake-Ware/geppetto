@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# Launch the Geppetto host client. Needs root for /dev/input (evdev grab) and
-# /dev/ttyACM* (serial write).
-# Usage: sudo ./run.sh                 # auto-detects the bridge Pico
-#        sudo ./run.sh --port /dev/ttyACM0
+# Launch the Geppetto host client. Reads /dev/input + the serial port via your
+# group membership (input, uucp) — no sudo needed. If it can't find devices,
+# you're probably not in those groups yet: see README (usermod -aG input,uucp).
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-PY="$(command -v python3)"
-# Prefer a local venv if one exists next to the client.
-[ -x "$DIR/.venv/bin/python" ] && PY="$DIR/.venv/bin/python"
-exec "$PY" -u "$DIR/geppetto.py" "$@"
+exec python3 -u "$DIR/geppetto.py" "$@"
