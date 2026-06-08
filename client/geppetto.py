@@ -23,6 +23,7 @@ Run :  sudo python3 geppetto.py             # auto-detects the bridge Pico
 """
 
 import argparse
+import os
 import selectors
 import signal
 import struct
@@ -34,16 +35,15 @@ from evdev import ecodes as e
 import serial
 from serial.tools import list_ports
 
+from geppetto_config import (
+    DEVICE_NAME, DOUBLE_TAP_WINDOW_S, DEFAULT_HOTKEY,
+    load_config, device_id, is_keyboard, is_pointer, hotkey_label,
+)
+
 REPORT_ID_KEYBOARD = 1
 REPORT_ID_MOUSE = 2
 
-DOUBLE_TAP_WINDOW_S = 0.4  # max gap between the two Right-Ctrl taps
-
 FRAME_SYNC = 0xAB
-
-# USB product string the firmware advertises; used to find our own bridge port
-# and to avoid capturing the dongle's own phantom HID interface.
-DEVICE_NAME = "Geppetto"
 
 # ---- framing (must match firmware crc8 / parser) --------------------------
 
@@ -229,36 +229,59 @@ def autodetect_port():
     return acm[0].device if acm else None
 
 
-def find_devices(kbd_paths, mouse_paths):
-    kbds, mice = [], []
+class Hotkey:
+    """Toggle detector. Two shapes, both configured via the GUI:
+       - double_tap: one key tapped twice within DOUBLE_TAP_WINDOW_S
+       - chord:      a set of keys all held down at the same time
+    """
+
+    def __init__(self, spec):
+        spec = spec or DEFAULT_HOTKEY
+        self.mode = spec.get("mode", "double_tap")
+        self.keys = set(spec.get("keys") or DEFAULT_HOTKEY["keys"])
+        self._last_tap = 0.0
+        self._satisfied = False
+
+    def feed(self, held, code, value):
+        """Call on every keyboard key event, with `held` already updated to the
+        current set of pressed keys. Returns True when the hotkey fires."""
+        if self.mode == "chord":
+            now = self.keys.issubset(held)
+            fired = now and not self._satisfied
+            self._satisfied = now
+            return fired
+        # double_tap
+        key = next(iter(self.keys))
+        if code == key and value == 1:
+            t = time.monotonic()
+            if t - self._last_tap <= DOUBLE_TAP_WINDOW_S:
+                self._last_tap = 0.0
+                return True
+            self._last_tap = t
+        return False
+
+
+def find_devices():
+    """All keyboards + pointers on the system, minus our own dongle's phantom
+    HID interface (grabbing that is pointless and risks a feedback loop)."""
+    devs = []
     for path in evdev.list_devices():
         d = evdev.InputDevice(path)
-        # Never capture our own dongle's phantom HID interfaces — that's the idle
-        # loopback side; grabbing it is pointless and risks a feedback loop.
         if DEVICE_NAME in d.name:
             d.close()
             continue
-        caps = d.capabilities()
-        keys = set(caps.get(e.EV_KEY, []))
-        has_rel = e.EV_REL in caps
-        if has_rel and (e.BTN_LEFT in keys):
-            mice.append(d)
-        elif e.KEY_A in keys and not has_rel:
-            kbds.append(d)
+        if is_keyboard(d) or is_pointer(d):
+            devs.append(d)
         else:
             d.close()
-    if kbd_paths:
-        kbds = [evdev.InputDevice(p) for p in kbd_paths]
-    if mouse_paths:
-        mice = [evdev.InputDevice(p) for p in mouse_paths]
-    return kbds, mice
+    return devs
 
 
 def main():
     ap = argparse.ArgumentParser(description="Geppetto twin-Pico HID-bridge client")
     ap.add_argument("--port", help="bridge Pico serial port (auto-detect if omitted)")
-    ap.add_argument("--kbd", action="append", help="explicit keyboard device path")
-    ap.add_argument("--mouse", action="append", help="explicit pointer device path")
+    ap.add_argument("--all", action="store_true",
+                    help="forward every device, ignoring the saved selection")
     args = ap.parse_args()
 
     port = args.port or autodetect_port()
@@ -267,80 +290,113 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
+    cfg = load_config()
+    selected = None if args.all else cfg.get("devices")  # None => forward all
+    hotkey = Hotkey(cfg.get("hotkey"))
+
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     sender = Sender(port)
     fwd = Forwarder(sender)
 
-    kbds, mice = find_devices(args.kbd, args.mouse)
-    if not kbds and not mice:
+    all_devs = find_devices()
+    if not all_devs:
         print("no input devices found (need root or 'input' group)", file=sys.stderr)
         sys.exit(1)
-    devices = kbds + mice
-    mouse_fds = {d.fd for d in mice}
+
+    sel_set = set(selected) if selected is not None else None
+
+    def wanted(d):
+        return sel_set is None or device_id(d) in sel_set
+
+    forwarded = [d for d in all_devs if wanted(d)]
+    fwd_fds = {d.fd for d in forwarded}
+    mouse_fds = {d.fd for d in all_devs if is_pointer(d)}
+
+    # Read every device (so the hotkey works regardless of what's forwarded —
+    # including mouse-button hotkeys). Only `forwarded` devices are grabbed/sent.
+    watched = all_devs
 
     print(f"bridge Pico   : {port}")
-    for d in kbds:
-        print(f"  keyboard    : {d.path}  {d.name}")
-    for d in mice:
-        print(f"  pointer     : {d.path}  {d.name}")
-    print("double-tap RIGHT CTRL to toggle forwarding. Ctrl-C to quit.")
+    print(f"hotkey        : {hotkey_label(cfg.get('hotkey') or DEFAULT_HOTKEY)}")
+    for d in watched:
+        tag = "forward" if d.fd in fwd_fds else "watch  "
+        kind = "kbd" if is_keyboard(d) else "ptr"
+        print(f"  [{tag}] {kind}  {d.name}")
+    if sel_set is not None and not forwarded:
+        print("  (warning: none of the selected devices are present)")
+    print("Edit devices/hotkey with the GUI (run_gui.sh). Ctrl-C to quit.")
 
     sel = selectors.DefaultSelector()
-    for d in devices:
+    for d in watched:
         sel.register(d.fd, selectors.EVENT_READ, d)
 
     forwarding = False
     grabbed = False
-    last_rctrl_down = 0.0
+    held = {}  # keycode -> press count, aggregated across all keyboards
 
     def set_grab(on):
         nonlocal grabbed
         if on and not grabbed:
-            for d in devices:
+            for d in forwarded:
                 try:
                     d.grab()
                 except OSError:
                     pass
             grabbed = True
         elif not on and grabbed:
-            for d in devices:
+            for d in forwarded:
                 try:
                     d.ungrab()
                 except OSError:
                     pass
             grabbed = False
 
+    # SIGHUP (sent by the GUI on Save) => re-exec to apply new config live.
+    reload_req = {"v": False}
+    signal.signal(signal.SIGHUP, lambda *_: reload_req.__setitem__("v", True))
+
     HEARTBEAT_S = 0.025
     try:
         while True:
+            if reload_req["v"]:
+                set_grab(False)
+                fwd.release_all()
+                print("[reloading config…]", flush=True)
+                os.environ["PYTHONUNBUFFERED"] = "1"  # keep stdout live after re-exec
+                os.execv(sys.executable,
+                         [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
             ready = sel.select(timeout=HEARTBEAT_S)
             for sk, _ in ready:
                 dev = sk.data
+                do_forward = dev.fd in fwd_fds
                 is_mouse = dev.fd in mouse_fds
                 try:
                     events = list(dev.read())
                 except BlockingIOError:
                     continue
                 for ev in events:
-                    if ev.type == e.EV_KEY and ev.code == e.KEY_RIGHTCTRL and ev.value == 1:
-                        now = time.monotonic()
-                        if now - last_rctrl_down <= DOUBLE_TAP_WINDOW_S:
+                    # ---- hotkey: track held keys/buttons across every device ----
+                    if ev.type == e.EV_KEY:
+                        if ev.value == 1:
+                            held[ev.code] = held.get(ev.code, 0) + 1
+                        elif ev.value == 0 and held.get(ev.code, 0) > 0:
+                            held[ev.code] -= 1
+                            if held[ev.code] == 0:
+                                del held[ev.code]
+                        if hotkey.feed(set(held), ev.code, ev.value):
                             forwarding = not forwarding
                             set_grab(forwarding)
                             fwd.release_all()
                             print(f"[forwarding {'ON' if forwarding else 'OFF'}]")
-                            last_rctrl_down = 0.0
-                            continue
-                        last_rctrl_down = now
 
-                    if not forwarding:
+                    if not forwarding or not do_forward:
                         continue
 
                     if ev.type == e.EV_KEY:
                         if is_mouse and ev.code in BUTTONMAP:
                             fwd.mouse_btn(ev.code, ev.value)
-                        else:
+                        elif not is_mouse:
                             fwd.kbd_event(ev.code, ev.value)
                     elif ev.type == e.EV_REL:
                         fwd.mouse_rel(ev.code, ev.value)

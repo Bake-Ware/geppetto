@@ -102,26 +102,49 @@ does this automatically).
 ## Run the host client
 
 ```sh
-pip install evdev pyserial
+pip install evdev pyserial      # (or distro pkgs: python-evdev, python-pyserial)
 cd client
 sudo ./run.sh                   # auto-detects the bridge Pico's serial port
 ```
 
 1. Leave one Pico in your PC (becomes the bridge), plug the other into the target.
 2. Run the client on your PC.
-3. **Double-tap Right-Ctrl** to start driving the target; double-tap again to
-   come back. While forwarding, your keyboard/trackball are grabbed
+3. **Double-tap Right-Ctrl** (default) to start driving the target; do it again to
+   come back. While forwarding, the selected keyboard/pointer are grabbed
    (`EVIOCGRAB`) so they stop affecting the local machine.
 
 The client also rides along on the bridge's read-only USB drive (`geppetto.py`,
-`run.sh`, `README.txt`), so you can pull it off the dongle on a fresh machine.
+`geppetto_config.py`, the GUI, launchers), so you can pull it off the dongle on a
+fresh machine.
+
+## Settings GUI
+
+A small GTK4 app picks which devices get forwarded and lets you set the hotkey:
+
+```sh
+cd client
+./run_gui.sh                    # runs under sudo on your graphical session
+```
+
+- **Devices**: tick the keyboards/pointers to forward. (No selection saved yet =
+  forward everything, the default.)
+- **Hotkey**: click *Capture* and press the combo you want — a single key becomes
+  a **double-tap**, several keys held together become a **chord** (press once).
+- **Save** writes `~/.config/geppetto/config.json`; restart the client to apply.
+
+The hotkey is watched on every keyboard regardless of selection, so it always
+works. Needs PyGObject + GTK4 (`python-gobject`, `gtk4`) plus root to read
+`/dev/input` — `run_gui.sh` forwards your Wayland/X display to the sudo'd app.
 
 ## Layout
 
 ```
 firmware/   PlatformIO project (one .cpp, symmetric). tools/ builds the embedded
             USB-drive image. src/disk_image.h is generated — not committed.
-client/     geppetto.py — evdev capture -> framed HID over serial. run.sh launcher.
+client/     geppetto.py         evdev capture -> framed HID over serial
+            geppetto_config.py  shared config + device/hotkey helpers
+            geppetto_gui.py     GTK4 settings app (device + hotkey picker)
+            run.sh / run_gui.sh launchers
 ```
 
 ## License
