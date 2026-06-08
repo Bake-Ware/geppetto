@@ -99,15 +99,21 @@ does this automatically).
 > `maxgerhardt/platform-raspberrypi` fork (the stock `raspberrypi` platform only
 > ships the Arduino-Mbed core). USB stack is Adafruit TinyUSB.
 
-## Run the host client
+## Install
 
-One-time setup — grant your user access to input devices + the serial port (no
-sudo needed afterward), then **log out and back in** so it takes effect:
+One command installs the deps, grants device access (the `input`/`uucp` groups),
+and adds a tray launcher — then **log out and back in** for the groups to apply:
 
 ```sh
-sudo usermod -aG input,uucp "$USER"   # then re-login
-pip install evdev pyserial            # (or: python-evdev, python-pyserial)
+cd client
+./install.sh --autostart        # omit --autostart to skip the login-start entry
 ```
+
+On Arch/CachyOS it installs the packages for you; elsewhere it lists them and you
+add yourself to the groups (`sudo usermod -aG input,uucp "$USER"`) + install
+PyGObject/GTK3/GTK4/python-evdev/pyserial. No sudo is needed to *run* it after.
+
+## Run the host client
 
 ```sh
 cd client
