@@ -128,13 +128,36 @@ cd client
 
 - **Devices**: tick the keyboards/pointers to forward. (No selection saved yet =
   forward everything, the default.)
-- **Hotkey**: click *Capture* and press the combo you want — a single key becomes
-  a **double-tap**, several keys held together become a **chord** (press once).
-- **Save** writes `~/.config/geppetto/config.json`; restart the client to apply.
+- **Hotkey**: click *Capture* and press the combo you want — a single key/button
+  becomes a **double-tap** (or **single tap** via the switch); several keys held
+  together become a **chord** (press once). Mouse buttons work too.
+- **Save** writes `~/.config/geppetto/config.json` and applies it **live** to any
+  running client (no restart) by signalling it.
 
-The hotkey is watched on every keyboard regardless of selection, so it always
+The hotkey is watched on every device regardless of selection, so it always
 works. Needs PyGObject + GTK4 (`python-gobject`, `gtk4`) plus root to read
 `/dev/input` — `run_gui.sh` forwards your Wayland/X display to the sudo'd app.
+
+## Tray indicator
+
+A system-tray indicator (GTK3 + Ayatana AppIndicator) shows forwarding state and
+controls the bridge — works on any StatusNotifier tray (KDE, GNOME w/ extension,
+waybar, etc.):
+
+```sh
+cd client
+./run_tray.sh                   # marionette icon appears in your tray
+./install-desktop.sh            # optional: app-menu launcher (+ --autostart)
+```
+
+- Icon: **grey** = client not running · **white** = running, forwarding off ·
+  **green** = forwarding on.
+- Menu: open Settings, toggle Forwarding, start/stop the bridge client, quit.
+  Middle-click the icon to toggle forwarding.
+
+The client publishes its state to `$XDG_RUNTIME_DIR/geppetto.status` and toggles
+on `SIGUSR1`; the tray polls the former and sends the latter. Needs
+`libayatana-appindicator` + `gtk3`.
 
 ## Layout
 
@@ -142,9 +165,11 @@ works. Needs PyGObject + GTK4 (`python-gobject`, `gtk4`) plus root to read
 firmware/   PlatformIO project (one .cpp, symmetric). tools/ builds the embedded
             USB-drive image. src/disk_image.h is generated — not committed.
 client/     geppetto.py         evdev capture -> framed HID over serial
-            geppetto_config.py  shared config + device/hotkey helpers
+            geppetto_config.py  shared config, device/hotkey/status helpers
             geppetto_gui.py     GTK4 settings app (device + hotkey picker)
-            run.sh / run_gui.sh launchers
+            geppetto_tray.py    GTK3 tray indicator (state + controls)
+            icons/              tray/app icons
+            run*.sh             launchers; install-desktop.sh adds a .desktop
 ```
 
 ## License

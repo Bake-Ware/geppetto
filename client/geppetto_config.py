@@ -62,6 +62,46 @@ def save_config(cfg):
     return path
 
 
+# ---- runtime status (client <-> tray) -------------------------------------
+# The client writes its live state here; the tray polls it for the icon.
+
+def status_path():
+    uid = pwd.getpwnam(_invoking_user()).pw_uid
+    rt = os.environ.get("XDG_RUNTIME_DIR")
+    if not rt or not os.path.isdir(rt):
+        rt = f"/run/user/{uid}"
+    if not os.path.isdir(rt):
+        rt = os.path.join(os.path.expanduser(f"~{_invoking_user()}"), ".cache", "geppetto")
+        os.makedirs(rt, exist_ok=True)
+    return os.path.join(rt, "geppetto.status")
+
+
+def write_status(d):
+    path = status_path()
+    try:
+        with open(path, "w") as f:
+            json.dump(d, f)
+        pw = pwd.getpwnam(_invoking_user())
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+    except (OSError, KeyError):
+        pass
+
+
+def read_status():
+    try:
+        with open(status_path()) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def clear_status():
+    try:
+        os.remove(status_path())
+    except OSError:
+        pass
+
+
 # ---- devices --------------------------------------------------------------
 
 def device_id(dev):

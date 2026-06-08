@@ -38,6 +38,7 @@ from serial.tools import list_ports
 from geppetto_config import (
     DEVICE_NAME, DOUBLE_TAP_WINDOW_S, DEFAULT_HOTKEY,
     load_config, device_id, is_keyboard, is_pointer, hotkey_label,
+    write_status, clear_status,
 )
 
 REPORT_ID_KEYBOARD = 1
@@ -354,9 +355,28 @@ def main():
                     pass
             grabbed = False
 
-    # SIGHUP (sent by the GUI on Save) => re-exec to apply new config live.
+    hk_label_str = hotkey_label(cfg.get("hotkey") or DEFAULT_HOTKEY)
+
+    def publish():
+        write_status({"pid": os.getpid(), "forwarding": forwarding,
+                      "devices": len(forwarded), "hotkey": hk_label_str})
+
+    def toggle():
+        nonlocal forwarding
+        forwarding = not forwarding
+        set_grab(forwarding)
+        fwd.release_all()
+        print(f"[forwarding {'ON' if forwarding else 'OFF'}]")
+        publish()
+
+    publish()  # advertise initial (off) state for the tray
+
+    # SIGHUP (GUI Save) => re-exec to apply new config live.
+    # SIGUSR1 (tray)    => toggle forwarding, same as the hotkey.
     reload_req = {"v": False}
+    toggle_req = {"v": False}
     signal.signal(signal.SIGHUP, lambda *_: reload_req.__setitem__("v", True))
+    signal.signal(signal.SIGUSR1, lambda *_: toggle_req.__setitem__("v", True))
 
     HEARTBEAT_S = 0.025
     try:
@@ -368,6 +388,9 @@ def main():
                 os.environ["PYTHONUNBUFFERED"] = "1"  # keep stdout live after re-exec
                 os.execv(sys.executable,
                          [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
+            if toggle_req["v"]:
+                toggle_req["v"] = False
+                toggle()
             ready = sel.select(timeout=HEARTBEAT_S)
             for sk, _ in ready:
                 dev = sk.data
@@ -387,10 +410,7 @@ def main():
                             if held[ev.code] == 0:
                                 del held[ev.code]
                         if hotkey.feed(set(held), ev.code, ev.value):
-                            forwarding = not forwarding
-                            set_grab(forwarding)
-                            fwd.release_all()
-                            print(f"[forwarding {'ON' if forwarding else 'OFF'}]")
+                            toggle()
                             continue  # don't also forward the triggering press
 
                     if not forwarding or not do_forward:
@@ -411,6 +431,7 @@ def main():
     finally:
         set_grab(False)
         fwd.release_all()
+        clear_status()
         print("\nstopped, devices released.")
 
 

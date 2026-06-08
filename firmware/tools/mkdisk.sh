@@ -31,13 +31,15 @@ Full notes in the docstring at the top of geppetto.py, and at
 https://github.com/Bake-Ware/geppetto
 TXT
 
-# The client needs geppetto_config.py; the GUI (geppetto_gui.py) is optional but
-# handy to have on the stick too.
+# The client needs geppetto_config.py; the GUI + tray are handy to carry too.
 mcopy -i "$IMG" "$CLIENT/geppetto.py"        ::/geppetto.py
 mcopy -i "$IMG" "$CLIENT/geppetto_config.py" ::/geppetto_config.py
 mcopy -i "$IMG" "$CLIENT/geppetto_gui.py"    ::/geppetto_gui.py
+mcopy -i "$IMG" "$CLIENT/geppetto_tray.py"   ::/geppetto_tray.py
 mcopy -i "$IMG" "$CLIENT/run.sh"             ::/run.sh
 mcopy -i "$IMG" "$CLIENT/run_gui.sh"         ::/run_gui.sh
+mcopy -i "$IMG" "$CLIENT/run_tray.sh"        ::/run_tray.sh
+mcopy -i "$IMG" -s "$CLIENT/icons"           ::/icons
 mcopy -i "$IMG" "$READ_ME"                   ::/README.txt
 rm -f "$READ_ME"
 
