@@ -250,6 +250,8 @@ class Hotkey:
             fired = now and not self._satisfied
             self._satisfied = now
             return fired
+        if self.mode == "single":
+            return code in self.keys and value == 1
         # double_tap
         key = next(iter(self.keys))
         if code == key and value == 1:
@@ -389,6 +391,7 @@ def main():
                             set_grab(forwarding)
                             fwd.release_all()
                             print(f"[forwarding {'ON' if forwarding else 'OFF'}]")
+                            continue  # don't also forward the triggering press
 
                     if not forwarding or not do_forward:
                         continue

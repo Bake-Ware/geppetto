@@ -162,11 +162,24 @@ class SettingsWindow(Gtk.ApplicationWindow):
         hk_row.append(self.hk_label)
         hk_row.append(capture_btn)
         root.append(hk_row)
+
+        # Single vs double tap (only meaningful for a single key/button; a
+        # multi-key combo is always a "chord" — hold all at once).
+        mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        mode_row.append(Gtk.Label(label="Require double-tap", xalign=0, hexpand=True))
+        self.dbl_switch = Gtk.Switch(halign=Gtk.Align.END, valign=Gtk.Align.CENTER)
+        self.dbl_switch.connect("state-set", self.on_mode_toggle)
+        mode_row.append(self.dbl_switch)
+        root.append(mode_row)
+
         self.hint = Gtk.Label(
-            label="Single key/button = double-tap; multiple held together = chord.",
-            xalign=0)
+            label="Capture a single key/button, then pick tap vs double-tap. "
+                  "Multiple keys held together = chord.",
+            xalign=0, wrap=True)
         self.hint.add_css_class("dim-label")
         root.append(self.hint)
+
+        self._sync_mode_switch()  # set switch from loaded config
 
         # ---- actions ----
         root.append(Gtk.Separator())
@@ -199,12 +212,40 @@ class SettingsWindow(Gtk.ApplicationWindow):
     def _capture_done(self, spec):
         if spec:
             self.hotkey = spec
-            self.hk_label.set_label(hotkey_label(spec))
+            self._sync_mode_switch()  # chord -> lock; single key -> honor switch
+            self._apply_mode()
             self.status.set_label("hotkey captured (not saved yet)")
         else:
             self.hk_label.set_label(hotkey_label(self.hotkey))
             self.status.set_label("capture timed out — nothing pressed")
         self._capture_btn.set_sensitive(True)
+        return False
+
+    # ---- single / double-tap toggle ----
+    def _is_chord(self):
+        return len(self.hotkey.get("keys", [])) > 1
+
+    def _sync_mode_switch(self):
+        """Set the switch from the current hotkey, disabling it for chords."""
+        chord = self._is_chord()
+        self.dbl_switch.set_sensitive(not chord)
+        # block our own handler while we set the initial state
+        self.dbl_switch.handler_block_by_func(self.on_mode_toggle)
+        self.dbl_switch.set_active(self.hotkey.get("mode") != "single")
+        self.dbl_switch.handler_unblock_by_func(self.on_mode_toggle)
+
+    def _apply_mode(self):
+        if self._is_chord():
+            self.hotkey["mode"] = "chord"
+        else:
+            self.hotkey["mode"] = "double_tap" if self.dbl_switch.get_active() else "single"
+        self.hk_label.set_label(hotkey_label(self.hotkey))
+
+    def on_mode_toggle(self, _switch, _state):
+        # _state is the requested value; apply it then let the switch update.
+        if not self._is_chord():
+            self.hotkey["mode"] = "double_tap" if _state else "single"
+            self.hk_label.set_label(hotkey_label(self.hotkey))
         return False
 
     # ---- save ----

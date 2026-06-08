@@ -99,4 +99,9 @@ def hotkey_label(hk):
     if not keys:
         return "(none)"
     combo = "+".join(key_label(k) for k in keys)
-    return f"double-tap {combo}" if hk.get("mode") == "double_tap" else combo
+    mode = hk.get("mode")
+    if mode == "double_tap":
+        return f"double-tap {combo}"
+    if mode == "single":
+        return f"tap {combo}"
+    return combo  # chord: just the held combo
