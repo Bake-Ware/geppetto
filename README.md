@@ -136,6 +136,9 @@ fresh machine.
 
 A small GTK4 app picks which devices get forwarded and lets you set the hotkey:
 
+<img src="docs/gui.png" alt="Geppetto settings window: device checkboxes and hotkey capture" width="380">
+
+
 ```sh
 cd client
 ./run_gui.sh                    # runs as your user (needs the 'input' group)
