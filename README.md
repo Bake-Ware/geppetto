@@ -37,6 +37,20 @@ KVM, etc.) and you just want to drive it without a second keyboard and mouse —
 including high-button trackballs (the mouse descriptor is an 8-button one, sized
 for things like the Elecom HUGE) that cheap hardware KVMs choke on.
 
+## Platform support
+
+**Controller** — the machine you drive *from* (runs the host client): **Linux
+only** for now. Input capture uses Linux `evdev`/`EVIOCGRAB`. The CLI client and
+GTK4 settings GUI run on any Linux desktop; the tray indicator is developed and
+tested on **KDE Plasma (Wayland)** and needs a StatusNotifier-style system tray
+(built into KDE; GNOME needs an extension; wlroots bars like waybar work too). A
+Windows controller is on the [roadmap](#roadmap).
+
+**Puppet** — the machine you drive *to* (where the gadget Pico plugs in): **any
+system, no software.** It only ever sees a standard USB keyboard + mouse, so it
+doesn't care what OS it runs — Windows, macOS, Linux, a UEFI/BIOS screen, a KVM
+login prompt, a console — if it accepts USB HID, Geppetto can drive it.
+
 ## Hardware
 
 Two Raspberry Pi Picos (or any RP2040 board), common ground, UART0 crossover:
@@ -192,6 +206,20 @@ client/     geppetto.py         evdev capture -> framed HID over serial
             icons/              tray/app icons
             run*.sh             launchers; install-desktop.sh adds a .desktop
 ```
+
+## Roadmap
+
+Controller-side ideas (the puppet side already works with anything):
+
+- [ ] **Windows controller client** — `pynput` (low-level hooks, incl. suppress
+      for the grab) + `pyserial`, reusing the wire protocol and config. Starts as
+      "forward everything"; per-device picking needs Raw Input.
+- [ ] **macOS controller client** — `CGEventTap` capture + `pyserial`.
+- [ ] **Per-device selection on Windows/macOS** — via Raw Input / IOKit (global
+      hooks alone can't tell devices apart).
+- [ ] **Consumer/media-key forwarding** from the client — the firmware already
+      exposes a consumer report (ID 4); the client just doesn't send it yet.
+- [ ] **Cross-platform tray** — `pystray` so the indicator isn't KDE/Linux-bound.
 
 ## License
 
