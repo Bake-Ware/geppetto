@@ -37,14 +37,28 @@ from serial.tools import list_ports
 
 from geppetto_config import (
     DEVICE_NAME, DOUBLE_TAP_WINDOW_S, DEFAULT_HOTKEY,
-    load_config, device_id, is_keyboard, is_pointer, hotkey_label,
+    load_config, device_id, is_keyboard, is_pointer, is_consumer, hotkey_label,
     write_status, clear_status,
 )
 
 REPORT_ID_KEYBOARD = 1
 REPORT_ID_MOUSE = 2
+REPORT_ID_CONSUMER = 4
 
 FRAME_SYNC = 0xAB
+
+# evdev media key -> USB HID Consumer Page (0x0C) usage. The firmware emits these
+# as report ID 4. Press sends the usage; release sends 0.
+CONSUMER_MAP = {}
+for _name, _usage in (
+    ("KEY_PLAYPAUSE", 0x00CD), ("KEY_PLAY", 0x00B0), ("KEY_PAUSE", 0x00B1),
+    ("KEY_STOPCD", 0x00B7), ("KEY_NEXTSONG", 0x00B5), ("KEY_PREVIOUSSONG", 0x00B6),
+    ("KEY_FASTFORWARD", 0x00B3), ("KEY_REWIND", 0x00B4),
+    ("KEY_MUTE", 0x00E2), ("KEY_VOLUMEUP", 0x00E9), ("KEY_VOLUMEDOWN", 0x00EA),
+    ("KEY_EJECTCD", 0x00B8), ("KEY_BRIGHTNESSUP", 0x006F), ("KEY_BRIGHTNESSDOWN", 0x0070),
+):
+    if hasattr(e, _name):
+        CONSUMER_MAP[getattr(e, _name)] = _usage
 
 # ---- framing (must match firmware crc8 / parser) --------------------------
 
@@ -167,6 +181,13 @@ class Forwarder:
         report = bytes([self.mods, 0] + keys + [0] * (6 - len(keys)))
         self.s.send(REPORT_ID_KEYBOARD, report)
 
+    # ---- consumer / media keys ----
+    def consumer_event(self, code, value):
+        usage = CONSUMER_MAP.get(code)
+        if usage is None or value == 2:   # ignore autorepeat
+            return
+        self.s.send(REPORT_ID_CONSUMER, struct.pack("<H", usage if value else 0))
+
     # ---- mouse ----
     def mouse_btn(self, code, value):
         bit = BUTTONMAP.get(code)
@@ -214,6 +235,7 @@ class Forwarder:
         self.dx = self.dy = self.wheel = self.pan = 0
         self.s.send(REPORT_ID_KEYBOARD, bytes(8))
         self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, 0, 0, 0, 0))
+        self.s.send(REPORT_ID_CONSUMER, struct.pack("<H", 0))
 
 
 def autodetect_port():
@@ -273,7 +295,7 @@ def find_devices():
         if DEVICE_NAME in d.name:
             d.close()
             continue
-        if is_keyboard(d) or is_pointer(d):
+        if is_keyboard(d) or is_pointer(d) or is_consumer(d):
             devs.append(d)
         else:
             d.close()
@@ -313,6 +335,14 @@ def main():
         return sel_set is None or device_id(d) in sel_set
 
     forwarded = [d for d in all_devs if wanted(d)]
+    # Media keys live on a sibling consumer node; forward the consumer interface
+    # of any forwarded keyboard (same vendor:product) so play/pause/volume get
+    # grabbed + forwarded instead of leaking to the host.
+    fwd_vp = {(d.info.vendor, d.info.product) for d in forwarded}
+    for d in all_devs:
+        if d not in forwarded and is_consumer(d) \
+                and (d.info.vendor, d.info.product) in fwd_vp:
+            forwarded.append(d)
     fwd_fds = {d.fd for d in forwarded}
     mouse_fds = {d.fd for d in all_devs if is_pointer(d)}
 
@@ -324,7 +354,7 @@ def main():
     print(f"hotkey        : {hotkey_label(cfg.get('hotkey') or DEFAULT_HOTKEY)}")
     for d in watched:
         tag = "forward" if d.fd in fwd_fds else "watch  "
-        kind = "kbd" if is_keyboard(d) else "ptr"
+        kind = "kbd" if is_keyboard(d) else "mda" if is_consumer(d) else "ptr"
         print(f"  [{tag}] {kind}  {d.name}")
     if sel_set is not None and not forwarded:
         print("  (warning: none of the selected devices are present)")
@@ -417,15 +447,16 @@ def main():
                         continue
 
                     if ev.type == e.EV_KEY:
-                        if is_mouse and ev.code in BUTTONMAP:
+                        if ev.code in CONSUMER_MAP:
+                            fwd.consumer_event(ev.code, ev.value)
+                        elif is_mouse and ev.code in BUTTONMAP:
                             fwd.mouse_btn(ev.code, ev.value)
                         elif not is_mouse:
                             fwd.kbd_event(ev.code, ev.value)
-                    elif ev.type == e.EV_REL:
+                    elif ev.type == e.EV_REL and is_mouse:
                         fwd.mouse_rel(ev.code, ev.value)
-                    elif ev.type == e.EV_SYN and ev.code == e.SYN_REPORT:
-                        if is_mouse:
-                            fwd.mouse_flush()
+                    elif ev.type == e.EV_SYN and ev.code == e.SYN_REPORT and is_mouse:
+                        fwd.mouse_flush()
     except KeyboardInterrupt:
         pass
     finally:

@@ -122,6 +122,26 @@ def is_pointer(dev):
     return e.EV_REL in caps and e.BTN_LEFT in keys
 
 
+# Media/consumer keys (play/pause, volume, …) usually sit on a separate evdev
+# node with no KEY_A and no BTN_LEFT, which the keyboard/pointer filters miss.
+MEDIA_CODES = frozenset(
+    getattr(e, n) for n in (
+        "KEY_PLAYPAUSE", "KEY_PLAY", "KEY_PAUSE", "KEY_STOPCD", "KEY_NEXTSONG",
+        "KEY_PREVIOUSSONG", "KEY_FASTFORWARD", "KEY_REWIND", "KEY_MUTE",
+        "KEY_VOLUMEUP", "KEY_VOLUMEDOWN", "KEY_EJECTCD",
+        "KEY_BRIGHTNESSUP", "KEY_BRIGHTNESSDOWN",
+    ) if hasattr(e, n)
+)
+
+
+def is_consumer(dev):
+    """A dedicated consumer/media-key device (media keys, but not a keyboard or
+    pointer) — e.g. 'Keychron Q11 Consumer Control'."""
+    caps = dev.capabilities()
+    keys = set(caps.get(e.EV_KEY, []))
+    return bool(MEDIA_CODES & keys) and not is_keyboard(dev) and not is_pointer(dev)
+
+
 # ---- key labels (for display + hotkey capture) ----------------------------
 
 def key_label(code):

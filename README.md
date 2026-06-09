@@ -217,9 +217,9 @@ Controller-side ideas (the puppet side already works with anything):
 - [ ] **macOS controller client** — `CGEventTap` capture + `pyserial`.
 - [ ] **Per-device selection on Windows/macOS** — via Raw Input / IOKit (global
       hooks alone can't tell devices apart).
-- [ ] **Consumer/media-key forwarding** from the client — the firmware already
-      exposes a consumer report (ID 4); the client just doesn't send it yet.
 - [ ] **Cross-platform tray** — `pystray` so the indicator isn't KDE/Linux-bound.
+- [x] ~~Consumer/media-key forwarding~~ — play/pause, volume, etc. are forwarded
+      (the keyboard's sibling consumer device is grabbed + sent as HID report 4).
 
 ## License
 
