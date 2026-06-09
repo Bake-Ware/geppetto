@@ -6,6 +6,8 @@
 mouse from your main PC over a plain wire — no KVM box, no network, no software
 on the target. Geppetto pulls the strings; the other machine is the puppet.
 
+![Two Raspberry Pi Picos soldered together into a Geppetto bridge](docs/geppetto.jpg)
+
 Two RP2040 Picos are soldered together and joined by a UART. One plugs into your
 PC, the other into the target. A small host script captures your keyboard and
 trackball and streams the HID reports across. Hit a hotkey to hand control over,
