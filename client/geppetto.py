@@ -334,15 +334,9 @@ def main():
     def wanted(d):
         return sel_set is None or device_id(d) in sel_set
 
+    # Forwarded = exactly what's selected (consumer/media devices included — they
+    # show as their own checkbox in the GUI, so play/pause/volume are opt-in).
     forwarded = [d for d in all_devs if wanted(d)]
-    # Media keys live on a sibling consumer node; forward the consumer interface
-    # of any forwarded keyboard (same vendor:product) so play/pause/volume get
-    # grabbed + forwarded instead of leaking to the host.
-    fwd_vp = {(d.info.vendor, d.info.product) for d in forwarded}
-    for d in all_devs:
-        if d not in forwarded and is_consumer(d) \
-                and (d.info.vendor, d.info.product) in fwd_vp:
-            forwarded.append(d)
     fwd_fds = {d.fd for d in forwarded}
     mouse_fds = {d.fd for d in all_devs if is_pointer(d)}
 

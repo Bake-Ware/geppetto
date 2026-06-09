@@ -23,7 +23,7 @@ from evdev import ecodes as e  # noqa: E402
 
 from geppetto_config import (  # noqa: E402
     DEFAULT_HOTKEY, load_config, save_config, config_path,
-    device_id, is_keyboard, is_pointer, hotkey_label, key_label,
+    device_id, is_keyboard, is_pointer, is_consumer, hotkey_label, key_label,
 )
 
 
@@ -37,17 +37,24 @@ def list_devices():
         except OSError:
             continue
         try:
-            if "Geppetto" in d.name or not (is_keyboard(d) or is_pointer(d)):
+            if "Geppetto" in d.name:
+                continue
+            if is_keyboard(d):
+                kind, rank = "keyboard", 0
+            elif is_consumer(d):
+                kind, rank = "media keys", 1
+            elif is_pointer(d):
+                kind, rank = "pointer", 2
+            else:
                 continue
             did = device_id(d)
             if did in seen:
                 continue
             seen.add(did)
-            kind = "keyboard" if is_keyboard(d) else "pointer"
-            out.append((did, f"{d.name}   ({kind})", is_keyboard(d)))
+            out.append((did, f"{d.name}   ({kind})", rank))
         finally:
             d.close()
-    out.sort(key=lambda r: (not r[2], r[1].lower()))  # keyboards first
+    out.sort(key=lambda r: (r[2], r[1].lower()))  # keyboards, media, pointers
     return out
 
 
