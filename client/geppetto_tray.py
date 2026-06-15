@@ -81,6 +81,10 @@ class Tray:
         GLib.timeout_add(1000, self._tick)
         self.refresh()
 
+        # Auto-start the bridge client so the hotkey works right after login.
+        if not self.client_pid():
+            self.client_proc = subprocess.Popen([sys.executable, "-u", CLIENT])
+
     # ---- state ----
     def client_pid(self):
         st = read_status()
