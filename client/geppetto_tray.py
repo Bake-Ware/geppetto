@@ -113,7 +113,8 @@ class Tray:
                                 else "Start bridge client")
         if running:
             self.i_status.set_label(f"forwarding {'ON' if forwarding else 'off'} · "
-                                    f"hotkey: {st.get('hotkey', '?')}")
+                                    f"hotkey: {st.get('hotkey', '?')} · "
+                                    f"keep-awake: {st.get('keep_awake', 'off')}")
         else:
             self.i_status.set_label("bridge client not running")
 

@@ -6,12 +6,23 @@ run under sudo) and looks like:
 
     {
       "devices": ["056e:00fb:ELECOM TrackBall Mouse HUGE TrackBall", ...],
-      "hotkey":  {"mode": "double_tap", "keys": [97]}      # 97 = KEY_RIGHTCTRL
+      "hotkey":  {"mode": "double_tap", "keys": [97]},     # 97 = KEY_RIGHTCTRL
+      "keep_awake": {
+        "enabled":    false,
+        "interval_s": 60,
+        "method":     "mouse",                             # mouse | shift | f15
+        "schedule":   {"enabled": false, "days": [0,1,2,3,4],
+                       "start": "09:00", "end": "17:00"}
+      }
     }
 
 - "devices": stable IDs (vendor:product:name) of the inputs to forward. Absent or
   null means "forward all keyboards + pointers" (the original behaviour).
 - "hotkey":  "double_tap" of a single key, or a "chord" (all keys held at once).
+- "keep_awake": periodically nudge the *target* so it doesn't sleep/lock. Only
+  runs while forwarding is OFF (when forwarding, your own input keeps it awake).
+  "schedule" optionally limits it to certain weekdays + a daily time window
+  (days are Python weekday() indices: Mon=0 … Sun=6).
 """
 
 import json
@@ -24,6 +35,45 @@ DEVICE_NAME = "Geppetto"      # our own USB product string — never forward it
 DOUBLE_TAP_WINDOW_S = 0.4     # max gap between the two taps in double-tap mode
 
 DEFAULT_HOTKEY = {"mode": "double_tap", "keys": [e.KEY_RIGHTCTRL]}
+
+# ---- keep-awake -----------------------------------------------------------
+
+DEFAULT_KEEP_AWAKE = {
+    "enabled": False,
+    "interval_s": 60,
+    "method": "mouse",          # see KEEP_AWAKE_METHODS
+    "schedule": {
+        "enabled": False,
+        "days": [0, 1, 2, 3, 4],   # Mon..Fri  (Python weekday(): Mon=0 .. Sun=6)
+        "start": "09:00",
+        "end": "17:00",
+    },
+}
+
+# (key, GUI label) — order is the dropdown order. The key is what's stored.
+KEEP_AWAKE_METHODS = [
+    ("mouse", "Mouse jiggle (invisible)"),
+    ("shift", "Tap Shift key"),
+    ("f15",   "Tap F15 key"),
+]
+
+DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def keep_awake_label(ka):
+    """Short human summary, e.g. 'jiggle every 60s · Mon-Fri 09:00-17:00'."""
+    ka = ka or DEFAULT_KEEP_AWAKE
+    if not ka.get("enabled"):
+        return "off"
+    method = {"mouse": "jiggle", "shift": "Shift", "f15": "F15"}.get(
+        ka.get("method", "mouse"), ka.get("method", "?"))
+    out = f"{method} every {int(ka.get('interval_s', 60))}s"
+    sched = ka.get("schedule") or {}
+    if sched.get("enabled"):
+        days = sched.get("days") or []
+        day_str = ",".join(DAY_LABELS[d] for d in sorted(days) if 0 <= d < 7) or "no days"
+        out += f" · {day_str} {sched.get('start', '00:00')}-{sched.get('end', '23:59')}"
+    return out
 
 
 # ---- config file ----------------------------------------------------------
