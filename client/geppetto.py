@@ -23,6 +23,7 @@ Run :  sudo python3 geppetto.py             # auto-detects the bridge Pico
 """
 
 import argparse
+import datetime
 import os
 import selectors
 import signal
@@ -36,9 +37,9 @@ import serial
 from serial.tools import list_ports
 
 from geppetto_config import (
-    DEVICE_NAME, DOUBLE_TAP_WINDOW_S, DEFAULT_HOTKEY,
+    DEVICE_NAME, DOUBLE_TAP_WINDOW_S, DEFAULT_HOTKEY, DEFAULT_KEEP_AWAKE,
     load_config, device_id, is_keyboard, is_pointer, is_consumer, hotkey_label,
-    write_status, clear_status,
+    keep_awake_label, write_status, clear_status,
 )
 
 REPORT_ID_KEYBOARD = 1
@@ -46,6 +47,10 @@ REPORT_ID_MOUSE = 2
 REPORT_ID_CONSUMER = 4
 
 FRAME_SYNC = 0xAB
+
+# keep-awake nudges (raw USB HID, not via evdev — sent straight to the target)
+HID_MOD_LSHIFT = 0x02   # left-shift bit in the keyboard report's modifier byte
+HID_KEY_F15 = 0x6A      # HID Keyboard/Keypad usage for F15 (apps rarely map it)
 
 # evdev media key -> USB HID Consumer Page (0x0C) usage. The firmware emits these
 # as report ID 4. Press sends the usage; release sends 0.
@@ -227,6 +232,21 @@ class Forwarder:
         self.dx = self.dy = self.wheel = self.pan = 0
         self.mouse_dirty = False
 
+    # ---- keep-awake: a tiny, target-only nudge so it doesn't sleep/lock ----
+    def nudge(self, method):
+        """Send a single harmless activity event to the target. Called only while
+        forwarding is OFF, so it never collides with the user's own input."""
+        if method == "shift":
+            # Tap and release Left-Shift (a modifier — types nothing on its own).
+            self.s.send(REPORT_ID_KEYBOARD, bytes([HID_MOD_LSHIFT, 0, 0, 0, 0, 0, 0, 0]))
+            self.s.send(REPORT_ID_KEYBOARD, bytes(8))
+        elif method == "f15":
+            self.s.send(REPORT_ID_KEYBOARD, bytes([0, 0, HID_KEY_F15, 0, 0, 0, 0, 0]))
+            self.s.send(REPORT_ID_KEYBOARD, bytes(8))
+        else:  # "mouse" — net-zero jiggle: +1px then -1px leaves the cursor put.
+            self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, 1, 0, 0, 0))
+            self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, -1, 0, 0, 0))
+
     # ---- toggle: release everything so nothing sticks down ----
     def release_all(self):
         self.mods = 0
@@ -236,6 +256,33 @@ class Forwarder:
         self.s.send(REPORT_ID_KEYBOARD, bytes(8))
         self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, 0, 0, 0, 0))
         self.s.send(REPORT_ID_CONSUMER, struct.pack("<H", 0))
+
+
+def _parse_hhmm(s):
+    """'HH:MM' -> minutes since midnight; falls back to 0 on garbage."""
+    try:
+        h, m = str(s).split(":")
+        return (int(h) % 24) * 60 + (int(m) % 60)
+    except (ValueError, AttributeError):
+        return 0
+
+
+def in_schedule(sched, now):
+    """True if keep-awake is allowed at `now` (a datetime). No/disabled schedule
+    means always allowed. Handles windows that wrap past midnight."""
+    if not sched or not sched.get("enabled"):
+        return True
+    days = sched.get("days")
+    if days is not None and now.weekday() not in days:
+        return False
+    start = _parse_hhmm(sched.get("start", "00:00"))
+    end = _parse_hhmm(sched.get("end", "23:59"))
+    if start == end:
+        return True  # degenerate window = the whole day
+    cur = now.hour * 60 + now.minute
+    if start < end:
+        return start <= cur < end
+    return cur >= start or cur < end  # overnight, e.g. 22:00–06:00
 
 
 def autodetect_port():
@@ -318,6 +365,7 @@ def main():
     cfg = load_config()
     selected = None if args.all else cfg.get("devices")  # None => forward all
     hotkey = Hotkey(cfg.get("hotkey"))
+    keep_awake = cfg.get("keep_awake") or dict(DEFAULT_KEEP_AWAKE)
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
@@ -346,6 +394,7 @@ def main():
 
     print(f"bridge Pico   : {port}")
     print(f"hotkey        : {hotkey_label(cfg.get('hotkey') or DEFAULT_HOTKEY)}")
+    print(f"keep-awake    : {keep_awake_label(keep_awake)}")
     for d in watched:
         tag = "forward" if d.fd in fwd_fds else "watch  "
         kind = "kbd" if is_keyboard(d) else "mda" if is_consumer(d) else "ptr"
@@ -383,7 +432,8 @@ def main():
 
     def publish():
         write_status({"pid": os.getpid(), "forwarding": forwarding,
-                      "devices": len(forwarded), "hotkey": hk_label_str})
+                      "devices": len(forwarded), "hotkey": hk_label_str,
+                      "keep_awake": keep_awake_label(keep_awake)})
 
     def toggle():
         nonlocal forwarding
@@ -402,9 +452,22 @@ def main():
     signal.signal(signal.SIGHUP, lambda *_: reload_req.__setitem__("v", True))
     signal.signal(signal.SIGUSR1, lambda *_: toggle_req.__setitem__("v", True))
 
+    # Keep-awake timer. interval clamped to >=5s so a bad config can't spam.
+    ka_interval = max(5, int(keep_awake.get("interval_s", 60) or 60))
+    next_nudge = time.monotonic() + ka_interval
+
     HEARTBEAT_S = 0.025
     try:
         while True:
+            # keep-awake: nudge the target on its own schedule, but never while
+            # forwarding (the user's input already keeps it awake then).
+            if keep_awake.get("enabled") and not forwarding:
+                now_mono = time.monotonic()
+                if now_mono >= next_nudge:
+                    if in_schedule(keep_awake.get("schedule"), datetime.datetime.now()):
+                        fwd.nudge(keep_awake.get("method", "mouse"))
+                    next_nudge = now_mono + ka_interval
+
             if reload_req["v"]:
                 set_grab(False)
                 fwd.release_all()

@@ -163,6 +163,12 @@ cd client
 - **Hotkey**: click *Capture* and press the combo you want — a single key/button
   becomes a **double-tap** (or **single tap** via the switch); several keys held
   together become a **chord** (press once). Mouse buttons work too.
+- **Keep target awake**: periodically send a harmless nudge to the *target* so it
+  doesn't sleep or lock. Pick the nudge — an invisible **mouse jiggle** (+1/−1px,
+  the cursor doesn't move), a **Shift** tap, or an **F15** tap — and the interval.
+  Optionally limit it to a **schedule**: tick the weekdays and set a daily
+  *from*/*to* window (24h, wraps past midnight). It only fires while forwarding is
+  **off** — when you're driving, your own input already keeps the target awake.
 - **Save** writes `~/.config/geppetto/config.json` and applies it **live** to any
   running client (no restart) by signalling it.
 

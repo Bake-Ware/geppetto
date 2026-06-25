@@ -22,7 +22,8 @@ import evdev  # noqa: E402
 from evdev import ecodes as e  # noqa: E402
 
 from geppetto_config import (  # noqa: E402
-    DEFAULT_HOTKEY, load_config, save_config, config_path,
+    DEFAULT_HOTKEY, DEFAULT_KEEP_AWAKE, KEEP_AWAKE_METHODS, DAY_LABELS,
+    load_config, save_config, config_path,
     device_id, is_keyboard, is_pointer, is_consumer, hotkey_label, key_label,
 )
 
@@ -128,11 +129,13 @@ def capture_combo(timeout=8.0):
 class SettingsWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Geppetto Settings")
-        self.set_default_size(420, 520)
+        self.set_default_size(440, 680)
 
         cfg = load_config()
         selected = cfg.get("devices")            # None => everything checked
         self.hotkey = cfg.get("hotkey") or dict(DEFAULT_HOTKEY)
+        ka = cfg.get("keep_awake") or {}
+        ka_sched = ka.get("schedule") or {}
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         for m in ("top", "bottom", "start", "end"):
@@ -187,6 +190,72 @@ class SettingsWindow(Gtk.ApplicationWindow):
         root.append(self.hint)
 
         self._sync_mode_switch()  # set switch from loaded config
+
+        # ---- keep target awake ----
+        root.append(Gtk.Separator())
+        ka_head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        ka_head.append(Gtk.Label(label="<b>Keep target awake</b>", use_markup=True,
+                                 xalign=0, hexpand=True))
+        self.ka_switch = Gtk.Switch(halign=Gtk.Align.END, valign=Gtk.Align.CENTER)
+        self.ka_switch.set_active(ka.get("enabled", DEFAULT_KEEP_AWAKE["enabled"]))
+        self.ka_switch.connect("notify::active", lambda *_: self._sync_ka_sensitivity())
+        ka_head.append(self.ka_switch)
+        root.append(ka_head)
+
+        # method + interval
+        self.ka_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.append(self.ka_body)
+
+        method_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        method_row.append(Gtk.Label(label="Nudge", xalign=0))
+        self.ka_method = Gtk.DropDown.new_from_strings([lbl for _k, lbl in KEEP_AWAKE_METHODS])
+        cur_method = ka.get("method", DEFAULT_KEEP_AWAKE["method"])
+        keys = [k for k, _lbl in KEEP_AWAKE_METHODS]
+        self.ka_method.set_selected(keys.index(cur_method) if cur_method in keys else 0)
+        method_row.append(self.ka_method)
+        method_row.append(Gtk.Label(label="every", xalign=0))
+        self.ka_interval = Gtk.SpinButton.new_with_range(5, 3600, 5)
+        self.ka_interval.set_value(int(ka.get("interval_s", DEFAULT_KEEP_AWAKE["interval_s"])))
+        method_row.append(self.ka_interval)
+        method_row.append(Gtk.Label(label="seconds", xalign=0, hexpand=True))
+        self.ka_body.append(method_row)
+
+        # schedule toggle
+        sched_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        sched_row.append(Gtk.Label(label="Only on a schedule", xalign=0, hexpand=True))
+        self.ka_sched_switch = Gtk.Switch(halign=Gtk.Align.END, valign=Gtk.Align.CENTER)
+        self.ka_sched_switch.set_active(ka_sched.get("enabled", False))
+        self.ka_sched_switch.connect("notify::active", lambda *_: self._sync_ka_sensitivity())
+        sched_row.append(self.ka_sched_switch)
+        self.ka_body.append(sched_row)
+
+        # day checkboxes
+        self.ka_sched_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.ka_body.append(self.ka_sched_box)
+        days_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        sel_days = ka_sched.get("days", DEFAULT_KEEP_AWAKE["schedule"]["days"]) or []
+        self.day_checks = []
+        for idx, name in enumerate(DAY_LABELS):
+            cb = Gtk.CheckButton(label=name)
+            cb.set_active(idx in sel_days)
+            days_row.append(cb)
+            self.day_checks.append(cb)
+        self.ka_sched_box.append(days_row)
+
+        # start / end times
+        time_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        time_row.append(Gtk.Label(label="From", xalign=0))
+        self.ka_start = Gtk.Entry(max_width_chars=5, width_chars=5)
+        self.ka_start.set_text(ka_sched.get("start", DEFAULT_KEEP_AWAKE["schedule"]["start"]))
+        time_row.append(self.ka_start)
+        time_row.append(Gtk.Label(label="to", xalign=0))
+        self.ka_end = Gtk.Entry(max_width_chars=5, width_chars=5)
+        self.ka_end.set_text(ka_sched.get("end", DEFAULT_KEEP_AWAKE["schedule"]["end"]))
+        time_row.append(self.ka_end)
+        time_row.append(Gtk.Label(label="(24h, HH:MM)", xalign=0, hexpand=True))
+        self.ka_sched_box.append(time_row)
+
+        self._sync_ka_sensitivity()
 
         # ---- actions ----
         root.append(Gtk.Separator())
@@ -255,10 +324,34 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self.hk_label.set_label(hotkey_label(self.hotkey))
         return False
 
+    # ---- keep-awake sensitivity ----
+    def _sync_ka_sensitivity(self):
+        on = self.ka_switch.get_active()
+        self.ka_body.set_sensitive(on)
+        self.ka_sched_box.set_sensitive(on and self.ka_sched_switch.get_active())
+
+    def _collect_keep_awake(self):
+        keys = [k for k, _lbl in KEEP_AWAKE_METHODS]
+        idx = self.ka_method.get_selected()
+        method = keys[idx] if 0 <= idx < len(keys) else keys[0]
+        days = [i for i, cb in enumerate(self.day_checks) if cb.get_active()]
+        return {
+            "enabled": self.ka_switch.get_active(),
+            "interval_s": int(self.ka_interval.get_value()),
+            "method": method,
+            "schedule": {
+                "enabled": self.ka_sched_switch.get_active(),
+                "days": days,
+                "start": self.ka_start.get_text().strip() or "00:00",
+                "end": self.ka_end.get_text().strip() or "23:59",
+            },
+        }
+
     # ---- save ----
     def on_save(self, _btn):
         devices = [did for cb, did in self.rows if cb.get_active()]
-        cfg = {"devices": devices, "hotkey": self.hotkey}
+        cfg = {"devices": devices, "hotkey": self.hotkey,
+               "keep_awake": self._collect_keep_awake()}
         path = save_config(cfg)
         n = signal_running_clients()
         if n:
