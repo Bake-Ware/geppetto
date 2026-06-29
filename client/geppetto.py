@@ -197,6 +197,7 @@ class Forwarder:
         self.btn_mask = 0
         self.dx = self.dy = self.wheel = self.pan = 0
         self.mouse_dirty = False
+        self.jiggle_dir = 1  # keep-awake mouse nudge alternates direction
 
     # ---- keyboard ----
     def kbd_event(self, code, value):
@@ -284,9 +285,13 @@ class Forwarder:
         elif method == "f15":
             self.s.send(REPORT_ID_KEYBOARD, bytes([0, 0, HID_KEY_F15, 0, 0, 0, 0, 0]))
             self.s.send(REPORT_ID_KEYBOARD, bytes(8))
-        else:  # "mouse" — net-zero jiggle: +1px then -1px leaves the cursor put.
-            self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, 1, 0, 0, 0))
-            self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, -1, 0, 0, 0))
+        else:  # "mouse" — a real ±10px step that alternates each tick, so the
+            # cursor oscillates (never drifts away) yet every nudge is genuine
+            # movement. A 1px or net-zero wiggle gets filtered as jitter and
+            # doesn't reset idle/sleep timers; this does.
+            step = 10 * self.jiggle_dir
+            self.jiggle_dir = -self.jiggle_dir
+            self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, step, 0, 0, 0))
 
     # ---- toggle: release everything so nothing sticks down ----
     def release_all(self):
