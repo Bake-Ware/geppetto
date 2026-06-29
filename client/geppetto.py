@@ -135,17 +135,58 @@ def clamp(v, lo, hi):
 
 
 class Sender:
-    """Writes framed HID reports to the bridge Pico's serial port."""
+    """Writes framed HID reports to the bridge Pico's serial port.
 
-    def __init__(self, port):
-        self.ser = serial.Serial(port, baudrate=115200, timeout=0,
-                                 write_timeout=0.2)
+    Survives the Pico re-enumerating (target reboot, replug, USB power event):
+    when a write fails the old handle is dropped and we re-resolve + reopen the
+    port — otherwise we'd keep writing into a dead fd forever (silent failure).
+    """
+
+    RETRY_S = 2.0  # don't hammer reconnects while the device is gone
+
+    def __init__(self, port, resolver=None):
+        self.port = port
+        self.resolver = resolver  # called to re-find the port after a drop
+        self.ser = None
+        self._next_retry = 0.0
+        self._open()
+
+    def _open(self):
+        try:
+            self.ser = serial.Serial(self.port, baudrate=115200, timeout=0,
+                                     write_timeout=0.2)
+            return True
+        except (serial.SerialException, OSError):
+            self.ser = None
+            return False
+
+    def _reconnect(self):
+        # The Pico may come back as a different /dev/ttyACM*, so re-resolve.
+        if self.resolver:
+            p = self.resolver()
+            if p:
+                self.port = p
+        if self._open():
+            print(f"serial reconnected: {self.port}", file=sys.stderr)
+            return True
+        return False
 
     def send(self, report_id, body: bytes):
+        if self.ser is None:
+            now = time.monotonic()
+            if now < self._next_retry or not self._reconnect():
+                self._next_retry = now + self.RETRY_S
+                return
         try:
             self.ser.write(frame(report_id, body))
-        except serial.SerialException as ex:
-            print(f"serial write failed: {ex}", file=sys.stderr)
+        except (serial.SerialException, OSError) as ex:
+            print(f"serial write failed ({ex}); will reconnect", file=sys.stderr)
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+            self.ser = None
+            self._next_retry = time.monotonic() + self.RETRY_S
 
 
 class Forwarder:
@@ -356,6 +397,9 @@ def main():
                     help="forward every device, ignoring the saved selection")
     args = ap.parse_args()
 
+    # If --port is given, keep using exactly that (it usually re-enumerates to
+    # the same path); otherwise re-run autodetect on every reconnect.
+    resolver = (lambda: args.port) if args.port else autodetect_port
     port = args.port or autodetect_port()
     if not port:
         print("no bridge Pico serial port found (looked for /dev/ttyACM*)",
@@ -369,7 +413,7 @@ def main():
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-    sender = Sender(port)
+    sender = Sender(port, resolver=resolver)
     fwd = Forwarder(sender)
 
     all_devs = find_devices()
