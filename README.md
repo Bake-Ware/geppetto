@@ -192,6 +192,11 @@ cd client
 - Menu: open Settings, toggle Forwarding, start/stop the bridge client, quit.
   Middle-click the icon to toggle forwarding.
 
+The tray **owns the bridge client**: on launch it adopts an already-running
+client (or starts one), restarts it if it dies, and stops it when you quit — so
+the two never drift apart. "Stop bridge client" in the menu is a deliberate
+*off* (the tray won't fight you and restart it); "Start" turns it back on.
+
 The client publishes its state to `$XDG_RUNTIME_DIR/geppetto.status` and toggles
 on `SIGUSR1`; the tray polls the former and sends the latter. Needs
 `libayatana-appindicator` + `gtk3`.

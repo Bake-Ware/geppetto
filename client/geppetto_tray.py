@@ -21,6 +21,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -46,6 +47,8 @@ def pid_alive(pid):
 
 
 class Tray:
+    RESTART_BACKOFF_S = 3.0  # min gap between (re)starts, so a crash can't spam
+
     def __init__(self):
         self.ind = AppIndicator.Indicator.new(
             "geppetto", "geppetto-idle",
@@ -55,7 +58,9 @@ class Tray:
         self.ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
 
         self.gui_proc = None
-        self.client_proc = None      # set if WE started the client
+        self.client_proc = None      # the client process we launched (supervised)
+        self.want_client = True      # intent: keep a client alive
+        self._last_spawn = 0.0       # for restart backoff
         self._suppress = False       # guard programmatic checkbox updates
         self._icon = None
 
@@ -79,17 +84,50 @@ class Tray:
         self.ind.set_secondary_activate_target(self.i_fwd)  # middle-click toggles
 
         GLib.timeout_add(1000, self._tick)
+        # Adopt an already-running client, or start one now so the hotkey works
+        # right after login. From here on _supervise() keeps it alive.
+        self._supervise()
         self.refresh()
-
-        # Auto-start the bridge client so the hotkey works right after login.
-        if not self.client_pid():
-            self.client_proc = subprocess.Popen([sys.executable, "-u", CLIENT])
 
     # ---- state ----
     def client_pid(self):
         st = read_status()
         pid = st.get("pid")
         return pid if pid_alive(pid) else None
+
+    # ---- client supervision ----
+    # The tray owns the bridge client: it adopts an existing one, restarts it if
+    # it dies, and stops it on quit — so the two never drift apart.
+    def _proc_alive(self):
+        return self.client_proc is not None and self.client_proc.poll() is None
+
+    def client_running(self):
+        """True if a client is up (one we launched, or any that's published
+        status) — _proc_alive covers the gap before the status file appears."""
+        return self.client_pid() is not None or self._proc_alive()
+
+    def _start_client(self):
+        self._last_spawn = time.monotonic()
+        self.client_proc = subprocess.Popen([sys.executable, "-u", CLIENT])
+
+    def _stop_client(self):
+        pid = self.client_pid()
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        if self._proc_alive():
+            self.client_proc.terminate()
+        self.client_proc = None
+
+    def _supervise(self):
+        """Keep exactly one client alive while we want one."""
+        if not self.want_client or self.client_running():
+            return
+        if time.monotonic() - self._last_spawn < self.RESTART_BACKOFF_S:
+            return  # crash-loop backoff
+        self._start_client()
 
     def _set_icon(self, name):
         if name != self._icon:
@@ -119,6 +157,7 @@ class Tray:
             self.i_status.set_label("bridge client not running")
 
     def _tick(self):
+        self._supervise()   # restart the client if it died while we want it up
         self.refresh()
         return True  # keep polling
 
@@ -137,18 +176,20 @@ class Tray:
         self.refresh()
 
     def on_client(self, _it):
-        pid = self.client_pid()
-        if pid:
-            os.kill(pid, signal.SIGTERM)
-            self.client_proc = None
+        # Toggle the *intent*; the supervisor honours it (and won't fight us).
+        if self.client_running():
+            self.want_client = False
+            self._stop_client()
         else:
-            self.client_proc = subprocess.Popen([sys.executable, "-u", CLIENT])
+            self.want_client = True
+            self._last_spawn = 0.0   # user asked now — skip the backoff wait
+            self._supervise()
         GLib.timeout_add(400, lambda: (self.refresh(), False)[1])
 
     def on_quit(self, _it):
-        # only stop the client if this tray started it
-        if self.client_proc and self.client_proc.poll() is None:
-            self.client_proc.terminate()
+        # The tray owns the client, so take it down with us.
+        self.want_client = False
+        self._stop_client()
         Gtk.main_quit()
 
 
