@@ -219,8 +219,10 @@ cd client
 
 - Icon: **grey** = client not running · **white** = running, forwarding off ·
   **green** = forwarding on.
-- Menu: open Settings, toggle Forwarding, start/stop the bridge client, quit.
-  Middle-click the icon to toggle forwarding.
+- Menu: open Settings, toggle Forwarding, fire a **Macro** from the *Macros*
+  submenu, start/stop the bridge client, quit. Middle-click the icon to toggle
+  forwarding. (The Macros submenu lists the macros from your config and is
+  greyed out when no bridge client is running.)
 
 The tray **owns the bridge client**: on launch it adopts an already-running
 client (or starts one), restarts it if it dies, and stops it when you quit — so
