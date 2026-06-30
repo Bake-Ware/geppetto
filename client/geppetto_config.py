@@ -115,7 +115,7 @@ def save_config(cfg):
 # ---- runtime status (client <-> tray) -------------------------------------
 # The client writes its live state here; the tray polls it for the icon.
 
-def status_path():
+def _runtime_dir():
     uid = pwd.getpwnam(_invoking_user()).pw_uid
     rt = os.environ.get("XDG_RUNTIME_DIR")
     if not rt or not os.path.isdir(rt):
@@ -123,7 +123,11 @@ def status_path():
     if not os.path.isdir(rt):
         rt = os.path.join(os.path.expanduser(f"~{_invoking_user()}"), ".cache", "geppetto")
         os.makedirs(rt, exist_ok=True)
-    return os.path.join(rt, "geppetto.status")
+    return rt
+
+
+def status_path():
+    return os.path.join(_runtime_dir(), "geppetto.status")
 
 
 def write_status(d):
@@ -150,6 +154,59 @@ def clear_status():
         os.remove(status_path())
     except OSError:
         pass
+
+
+# ---- one-shot commands (GUI -> client) ------------------------------------
+# The GUI drops a command here and signals the client (SIGUSR2) to act on it —
+# used to fire a macro at the target, since only the client holds the serial
+# link. A file (not the signal alone) so we can pass the macro's steps.
+
+def command_path():
+    return os.path.join(_runtime_dir(), "geppetto.cmd")
+
+
+def write_command(d):
+    path = command_path()
+    try:
+        with open(path, "w") as f:
+            json.dump(d, f)
+        pw = pwd.getpwnam(_invoking_user())
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+    except (OSError, KeyError):
+        pass
+
+
+def read_command():
+    try:
+        with open(command_path()) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def clear_command():
+    try:
+        os.remove(command_path())
+    except OSError:
+        pass
+
+
+# ---- macros ---------------------------------------------------------------
+# A macro is an ordered list of steps sent to the *target*:
+#   {"type": "combo", "keys": [29, 56, 111]}  # evdev codes held together (CAD)
+#   {"type": "text",  "text": "hunter2"}      # typed out, US layout
+#   {"type": "delay", "ms": 500}              # pause between steps
+
+def macro_step_label(step):
+    t = step.get("type")
+    if t == "combo":
+        keys = step.get("keys", [])
+        return "+".join(key_label(k) for k in keys) or "(empty combo)"
+    if t == "text":
+        return f'type "{step.get("text", "")}"'
+    if t == "delay":
+        return f"wait {int(step.get('ms', 0))} ms"
+    return "(unknown step)"
 
 
 # ---- devices --------------------------------------------------------------
