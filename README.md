@@ -184,6 +184,10 @@ things a hardware KVM can't do, like punching **Ctrl+Alt+Del** into a Windows
 login then typing your username/password and hitting Enter.
 
 - **New / Delete** a macro; give it a **Name**.
+- **Hotkey** (optional): *Capture* a key/combo to fire the macro hands-free — a
+  single key fires on **double-tap**, a held combo (e.g. Ctrl+Alt+L) fires once.
+  *Clear* removes it. The client watches for these on every device (like the
+  forwarding hotkey), so a macro can fire whether or not the GUI is open.
 - Add **steps**, run top to bottom:
   - **+ Ctrl+Alt+Del** — one click adds the secure-attention combo.
   - **Capture combo…** — press any key combo to add it as a step.
@@ -192,7 +196,8 @@ login then typing your username/password and hitting Enter.
   - **+ Delay** — pause N ms between steps (e.g. wait for a login screen).
 - **Remove step** drops the selected step.
 - **Send to target** fires the selected macro at the running client immediately
-  (works whether forwarding is on or off). **Save** persists your macros.
+  (works whether forwarding is on or off). **Save** persists your macros and
+  their hotkeys (and applies them live to the running client).
 
 > Note: macro **text** steps are stored in plain text in `config.json`. Fine for
 > a username; think twice before saving a real password there.
