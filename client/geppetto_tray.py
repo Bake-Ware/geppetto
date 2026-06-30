@@ -28,7 +28,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import Gtk, GLib, AyatanaAppIndicator3 as AppIndicator  # noqa: E402
 
-from geppetto_config import read_status  # noqa: E402
+from geppetto_config import read_status, load_config, write_command  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ICON_DIR = os.path.join(HERE, "icons")
@@ -63,12 +63,15 @@ class Tray:
         self._last_spawn = 0.0       # for restart backoff
         self._suppress = False       # guard programmatic checkbox updates
         self._icon = None
+        self._macro_sig = None       # rebuild the macro submenu only on change
 
         m = Gtk.Menu()
         self.i_settings = Gtk.MenuItem.new_with_label("Open Settings…")
         self.i_settings.connect("activate", self.on_settings)
         self.i_fwd = Gtk.CheckMenuItem.new_with_label("Forwarding")
         self.i_fwd.connect("toggled", self.on_fwd)
+        self.i_macros = Gtk.MenuItem.new_with_label("Macros")
+        self.i_macros.set_submenu(Gtk.Menu())
         self.i_client = Gtk.MenuItem.new_with_label("Start bridge client")
         self.i_client.connect("activate", self.on_client)
         self.i_status = Gtk.MenuItem.new_with_label("")
@@ -76,8 +79,8 @@ class Tray:
         i_quit = Gtk.MenuItem.new_with_label("Quit")
         i_quit.connect("activate", self.on_quit)
         for it in (self.i_settings, Gtk.SeparatorMenuItem(), self.i_fwd,
-                   self.i_client, Gtk.SeparatorMenuItem(), self.i_status,
-                   Gtk.SeparatorMenuItem(), i_quit):
+                   self.i_macros, self.i_client, Gtk.SeparatorMenuItem(),
+                   self.i_status, Gtk.SeparatorMenuItem(), i_quit):
             m.append(it)
         m.show_all()
         self.ind.set_menu(m)
@@ -149,12 +152,46 @@ class Tray:
         self.i_fwd.set_sensitive(running)
         self.i_client.set_label("Stop bridge client" if running
                                 else "Start bridge client")
+        self._refresh_macros(running)
         if running:
             self.i_status.set_label(f"forwarding {'ON' if forwarding else 'off'} · "
                                     f"hotkey: {st.get('hotkey', '?')} · "
                                     f"keep-awake: {st.get('keep_awake', 'off')}")
         else:
             self.i_status.set_label("bridge client not running")
+
+    # ---- macros submenu ----
+    def _refresh_macros(self, running):
+        """Rebuild the Macros submenu from config when it changes; grey it out
+        when there's no client to run them."""
+        macros = load_config().get("macros") or []
+        sig = tuple((m.get("name"), len(m.get("steps") or [])) for m in macros)
+        if sig != self._macro_sig:
+            self._macro_sig = sig
+            sub = Gtk.Menu()
+            if not macros:
+                empty = Gtk.MenuItem.new_with_label("(no macros — add them in Settings)")
+                empty.set_sensitive(False)
+                sub.append(empty)
+            else:
+                for mc in macros:
+                    it = Gtk.MenuItem.new_with_label(mc.get("name", "macro"))
+                    it.connect("activate", lambda _w, m=mc: self._send_macro(m))
+                    sub.append(it)
+            sub.show_all()
+            self.i_macros.set_submenu(sub)
+        self.i_macros.set_sensitive(running and bool(macros))
+
+    def _send_macro(self, macro):
+        pid = self.client_pid()
+        if not pid:
+            return
+        write_command({"name": macro.get("name", "macro"),
+                       "macro": macro.get("steps") or []})
+        try:
+            os.kill(pid, signal.SIGUSR2)
+        except OSError:
+            pass
 
     def _tick(self):
         self._supervise()   # restart the client if it died while we want it up
