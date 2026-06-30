@@ -39,7 +39,7 @@ from serial.tools import list_ports
 from geppetto_config import (
     DEVICE_NAME, DOUBLE_TAP_WINDOW_S, DEFAULT_HOTKEY, DEFAULT_KEEP_AWAKE,
     load_config, device_id, is_keyboard, is_pointer, is_consumer, hotkey_label,
-    keep_awake_label, write_status, clear_status,
+    keep_awake_label, write_status, clear_status, read_command, clear_command,
 )
 
 REPORT_ID_KEYBOARD = 1
@@ -128,6 +128,28 @@ BUTTONMAP = {
     e.BTN_SIDE: 3, e.BTN_EXTRA: 4, e.BTN_FORWARD: 5,
     e.BTN_BACK: 6, e.BTN_TASK: 7,
 }
+
+# Printable char -> (HID usage, needs_shift), US layout. Used by macro "text"
+# steps to type a string out at the target.
+CHAR_TO_HID = {}
+for _i, _c in enumerate("abcdefghijklmnopqrstuvwxyz"):
+    CHAR_TO_HID[_c] = (0x04 + _i, False)
+    CHAR_TO_HID[_c.upper()] = (0x04 + _i, True)
+for _i, _c in enumerate("123456789"):
+    CHAR_TO_HID[_c] = (0x1E + _i, False)
+CHAR_TO_HID["0"] = (0x27, False)
+for _c, _base in zip("!@#$%^&*()", "1234567890"):
+    CHAR_TO_HID[_c] = (CHAR_TO_HID[_base][0], True)
+for _c, _u, _s in (
+    (" ", 0x2C, False), ("\n", 0x28, False), ("\t", 0x2B, False),
+    ("-", 0x2D, False), ("_", 0x2D, True), ("=", 0x2E, False), ("+", 0x2E, True),
+    ("[", 0x2F, False), ("{", 0x2F, True), ("]", 0x30, False), ("}", 0x30, True),
+    ("\\", 0x31, False), ("|", 0x31, True), (";", 0x33, False), (":", 0x33, True),
+    ("'", 0x34, False), ('"', 0x34, True), ("`", 0x35, False), ("~", 0x35, True),
+    (",", 0x36, False), ("<", 0x36, True), (".", 0x37, False), (">", 0x37, True),
+    ("/", 0x38, False), ("?", 0x38, True),
+):
+    CHAR_TO_HID[_c] = (_u, _s)
 
 
 def clamp(v, lo, hi):
@@ -292,6 +314,49 @@ class Forwarder:
             step = 10 * self.jiggle_dir
             self.jiggle_dir = -self.jiggle_dir
             self.s.send(REPORT_ID_MOUSE, struct.pack("<Bhhbb", 0, step, 0, 0, 0))
+
+    # ---- macros: scripted key sequences sent to the target ----
+    def send_combo(self, keys, hold=0.05):
+        """Press a set of evdev key codes together (mods + up to 6 keys), then
+        release. e.g. [LEFTCTRL, LEFTALT, DELETE] -> Ctrl+Alt+Del."""
+        mods = 0
+        usages = []
+        for k in keys:
+            if k in MODIFIERS:
+                mods |= MODIFIERS[k]
+            elif k in KEYMAP:
+                usages.append(KEYMAP[k])
+        usages = usages[:6]
+        report = bytes([mods, 0] + usages + [0] * (6 - len(usages)))
+        self.s.send(REPORT_ID_KEYBOARD, report)
+        time.sleep(hold)
+        self.s.send(REPORT_ID_KEYBOARD, bytes(8))
+        time.sleep(hold)
+
+    def type_text(self, text, hold=0.012):
+        """Type a string at the target, one key at a time (US layout)."""
+        for ch in text:
+            m = CHAR_TO_HID.get(ch)
+            if m is None:
+                continue
+            usage, shift = m
+            mods = MODIFIERS[e.KEY_LEFTSHIFT] if shift else 0
+            self.s.send(REPORT_ID_KEYBOARD, bytes([mods, 0, usage, 0, 0, 0, 0, 0]))
+            time.sleep(hold)
+            self.s.send(REPORT_ID_KEYBOARD, bytes(8))
+            time.sleep(hold)
+
+    def run_macro(self, steps):
+        """Execute a list of macro steps (combo / text / delay) at the target."""
+        for st in steps or []:
+            t = st.get("type")
+            if t == "combo":
+                self.send_combo(st.get("keys", []))
+            elif t == "text":
+                self.type_text(st.get("text", ""))
+            elif t == "delay":
+                time.sleep(min(10.0, max(0, int(st.get("ms", 0))) / 1000.0))
+        self.s.send(REPORT_ID_KEYBOARD, bytes(8))  # safety: nothing left held
 
     # ---- toggle: release everything so nothing sticks down ----
     def release_all(self):
@@ -494,12 +559,15 @@ def main():
 
     publish()  # advertise initial (off) state for the tray
 
-    # SIGHUP (GUI Save) => re-exec to apply new config live.
-    # SIGUSR1 (tray)    => toggle forwarding, same as the hotkey.
+    # SIGHUP  (GUI Save)      => re-exec to apply new config live.
+    # SIGUSR1 (tray)          => toggle forwarding, same as the hotkey.
+    # SIGUSR2 (GUI "Send")    => run the macro left in the command file.
     reload_req = {"v": False}
     toggle_req = {"v": False}
+    macro_req = {"v": False}
     signal.signal(signal.SIGHUP, lambda *_: reload_req.__setitem__("v", True))
     signal.signal(signal.SIGUSR1, lambda *_: toggle_req.__setitem__("v", True))
+    signal.signal(signal.SIGUSR2, lambda *_: macro_req.__setitem__("v", True))
 
     # Keep-awake timer. interval clamped to >=5s so a bad config can't spam.
     ka_interval = max(5, int(keep_awake.get("interval_s", 60) or 60))
@@ -527,6 +595,15 @@ def main():
             if toggle_req["v"]:
                 toggle_req["v"] = False
                 toggle()
+            if macro_req["v"]:
+                macro_req["v"] = False
+                cmd = read_command()
+                clear_command()
+                steps = cmd.get("macro")
+                if steps:
+                    name = cmd.get("name", "macro")
+                    print(f"[running macro: {name} ({len(steps)} steps)]", flush=True)
+                    fwd.run_macro(steps)
             ready = sel.select(timeout=HEARTBEAT_S)
             for sk, _ in ready:
                 dev = sk.data

@@ -158,19 +158,44 @@ cd client
 ./run_gui.sh                    # runs as your user (needs the 'input' group)
 ```
 
+The window has two tabs: **Settings** and **Macros**.
+
+### Settings tab
+
 - **Devices**: tick the keyboards/pointers to forward. (No selection saved yet =
   forward everything, the default.)
 - **Hotkey**: click *Capture* and press the combo you want — a single key/button
   becomes a **double-tap** (or **single tap** via the switch); several keys held
   together become a **chord** (press once). Mouse buttons work too.
 - **Keep target awake**: periodically send a harmless nudge to the *target* so it
-  doesn't sleep or lock. Pick the nudge — an invisible **mouse jiggle** (+1/−1px,
-  the cursor doesn't move), a **Shift** tap, or an **F15** tap — and the interval.
-  Optionally limit it to a **schedule**: tick the weekdays and set a daily
-  *from*/*to* window (24h, wraps past midnight). It only fires while forwarding is
-  **off** — when you're driving, your own input already keeps the target awake.
+  doesn't sleep or lock. Pick the nudge — a **mouse jiggle** (a 10px step that
+  alternates direction each tick, so the cursor wobbles in place rather than
+  drifting), a **Shift** tap, or an **F15** tap — and the interval. Optionally
+  limit it to a **schedule**: tick the weekdays and set a daily *from*/*to*
+  window (24h, wraps past midnight). It only fires while forwarding is **off** —
+  when you're driving, your own input already keeps the target awake.
 - **Save** writes `~/.config/geppetto/config.json` and applies it **live** to any
   running client (no restart) by signalling it.
+
+### Macros tab
+
+Build named **macros** — scripted key sequences sent to the *target* — handy for
+things a hardware KVM can't do, like punching **Ctrl+Alt+Del** into a Windows
+login then typing your username/password and hitting Enter.
+
+- **New / Delete** a macro; give it a **Name**.
+- Add **steps**, run top to bottom:
+  - **+ Ctrl+Alt+Del** — one click adds the secure-attention combo.
+  - **Capture combo…** — press any key combo to add it as a step.
+  - **+ Text** — type a string into the box; it's typed out at the target
+    (US layout).
+  - **+ Delay** — pause N ms between steps (e.g. wait for a login screen).
+- **Remove step** drops the selected step.
+- **Send to target** fires the selected macro at the running client immediately
+  (works whether forwarding is on or off). **Save** persists your macros.
+
+> Note: macro **text** steps are stored in plain text in `config.json`. Fine for
+> a username; think twice before saving a real password there.
 
 The hotkey is watched on every device regardless of selection, so it always
 works. Needs PyGObject + GTK4 (`python-gobject`, `gtk4`) and the `input` group.
