@@ -363,9 +363,13 @@ class SettingsWindow(Gtk.ApplicationWindow):
     # ---- macros tab ----
     def _build_macros_page(self, cfg):
         self._macro_suppress = False
-        self.macros = [{"name": mc.get("name", "macro"),
-                        "steps": list(mc.get("steps") or [])}
-                       for mc in (cfg.get("macros") or [])]
+        self.macros = []
+        for mc in (cfg.get("macros") or []):
+            m = {"name": mc.get("name", "macro"),
+                 "steps": list(mc.get("steps") or [])}
+            if mc.get("hotkey"):
+                m["hotkey"] = mc["hotkey"]
+            self.macros.append(m)
         self.cur_macro = 0 if self.macros else None
 
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -402,6 +406,24 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.macro_name_entry.connect("changed", self.on_macro_name_changed)
         name_row.append(self.macro_name_entry)
         page.append(name_row)
+
+        # optional hotkey that fires this macro
+        hk_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        hk_row.append(Gtk.Label(label="Hotkey", xalign=0))
+        self.macro_hk_label = Gtk.Label(label="(none)", xalign=0, hexpand=True)
+        self.macro_hk_label.set_selectable(True)
+        self._macro_hk_btn = Gtk.Button(label="Capture")
+        self._macro_hk_btn.connect("clicked", self.on_macro_hk_capture)
+        clr_btn = Gtk.Button(label="Clear")
+        clr_btn.connect("clicked", self.on_macro_hk_clear)
+        hk_row.append(self.macro_hk_label)
+        hk_row.append(self._macro_hk_btn)
+        hk_row.append(clr_btn)
+        page.append(hk_row)
+        page.append(Gtk.Label(
+            label="A single key fires on double-tap; a held combo (e.g. "
+                  "Ctrl+Alt+L) fires once. Save to apply.",
+            xalign=0, wrap=True, css_classes=["dim-label"]))
 
         # steps of selected macro
         page.append(Gtk.Label(label="<b>Steps</b> (run top to bottom)",
@@ -477,11 +499,25 @@ class SettingsWindow(Gtk.ApplicationWindow):
                               margin_top=3, margin_bottom=3))
         return r
 
+    @staticmethod
+    def _macro_list_label(mc):
+        s = mc["name"] or "(unnamed)"
+        if mc.get("hotkey"):
+            s += f"   [{hotkey_label(mc['hotkey'])}]"
+        return s
+
+    def _refresh_macro_row(self):
+        if self.cur_macro is None:
+            return
+        row = self.macros_listbox.get_row_at_index(self.cur_macro)
+        if row is not None:
+            row.get_child().set_label(self._macro_list_label(self._cur_macro()))
+
     def _reload_macro_list(self):
         self._macro_suppress = True
         self._clear_listbox(self.macros_listbox)
         for mc in self.macros:
-            self.macros_listbox.append(self._list_row(mc["name"] or "(unnamed)"))
+            self.macros_listbox.append(self._list_row(self._macro_list_label(mc)))
         if self.cur_macro is not None:
             self.macros_listbox.select_row(
                 self.macros_listbox.get_row_at_index(self.cur_macro))
@@ -493,6 +529,8 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self._macro_suppress = True
         self.macro_name_entry.set_text(mc["name"] if mc else "")
         self._macro_suppress = False
+        self.macro_hk_label.set_label(
+            hotkey_label(mc["hotkey"]) if mc and mc.get("hotkey") else "(none)")
         self._reload_steps()
 
     def _reload_steps(self):
@@ -529,9 +567,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         if mc is None:
             return
         mc["name"] = entry.get_text()
-        row = self.macros_listbox.get_row_at_index(self.cur_macro)
-        if row is not None:
-            row.get_child().set_label(mc["name"] or "(unnamed)")
+        self._refresh_macro_row()
 
     def _append_step(self, step):
         if self._cur_macro() is None:
@@ -598,6 +634,40 @@ class SettingsWindow(Gtk.ApplicationWindow):
                                   + ("s" if n != 1 else ""))
         else:
             self.status.set_label("no running client — start the bridge client first")
+
+    # ---- per-macro hotkey ----
+    def on_macro_hk_capture(self, btn):
+        if self._cur_macro() is None:
+            self.on_macro_new(None)
+        btn.set_sensitive(False)
+        self.macro_hk_label.set_label("press the hotkey, then release…")
+
+        def worker():
+            spec = capture_combo()
+            GLib.idle_add(self._macro_hk_captured, spec)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _macro_hk_captured(self, spec):
+        self._macro_hk_btn.set_sensitive(True)
+        mc = self._cur_macro()
+        if spec and spec.get("keys") and mc is not None:
+            mc["hotkey"] = spec
+            self.macro_hk_label.set_label(hotkey_label(spec))
+            self._refresh_macro_row()
+            self.status.set_label("macro hotkey captured (not saved yet)")
+        else:
+            self.macro_hk_label.set_label(
+                hotkey_label(mc["hotkey"]) if mc and mc.get("hotkey") else "(none)")
+            self.status.set_label("capture timed out — nothing pressed")
+        return False
+
+    def on_macro_hk_clear(self, _btn):
+        mc = self._cur_macro()
+        if mc and mc.get("hotkey"):
+            del mc["hotkey"]
+        self.macro_hk_label.set_label("(none)")
+        self._refresh_macro_row()
 
     # ---- save ----
     def on_save(self, _btn):

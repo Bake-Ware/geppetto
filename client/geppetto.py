@@ -481,6 +481,14 @@ def main():
     hotkey = Hotkey(cfg.get("hotkey"))
     keep_awake = cfg.get("keep_awake") or dict(DEFAULT_KEEP_AWAKE)
 
+    # Macros with a hotkey get their own detector; firing runs the macro.
+    macro_hotkeys = []  # (Hotkey, name, steps)
+    for mc in (cfg.get("macros") or []):
+        spec = mc.get("hotkey")
+        if spec and spec.get("keys"):
+            macro_hotkeys.append((Hotkey(spec), mc.get("name", "macro"),
+                                  mc.get("steps") or []))
+
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     sender = Sender(port, resolver=resolver)
@@ -625,6 +633,21 @@ def main():
                         if hotkey.feed(set(held), ev.code, ev.value):
                             toggle()
                             continue  # don't also forward the triggering press
+
+                        # macro hotkeys: feed every one (to keep chord state in
+                        # sync) and run the first that fires.
+                        if macro_hotkeys:
+                            held_now = set(held)
+                            fired = None
+                            for hk, name, steps in macro_hotkeys:
+                                if hk.feed(held_now, ev.code, ev.value) and fired is None:
+                                    fired = (name, steps)
+                            if fired:
+                                name, steps = fired
+                                print(f"[running macro: {name} "
+                                      f"({len(steps)} steps)]", flush=True)
+                                fwd.run_macro(steps)
+                                continue  # don't forward the triggering press
 
                     if not forwarding or not do_forward:
                         continue
